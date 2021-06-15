@@ -35,6 +35,7 @@ AddReference("QuantConnect.Common")
 AddReference("QuantConnect.Configuration")
 AddReference("QuantConnect.Research")
 AddReference("QuantConnect.Indicators")
+AddReference("Fasterflect")
 
 from System import *
 from QuantConnect import *
