@@ -184,7 +184,7 @@ namespace QuantConnect.Lean.Engine
         public static LeanEngineAlgorithmHandlers FromConfiguration(Composer composer)
         {
             var setupHandlerTypeName = Config.Get("setup-handler", "ConsoleSetupHandler");
-            var transactionHandlerTypeName = Config.Get("transaction-handler", "BacktestingTransactionHandler");
+            var transactionHandlerTypeName = "BacktestingTransactionHandler";
             var realTimeHandlerTypeName = Config.Get("real-time-handler", "BacktestingRealTimeHandler");
             var dataFeedHandlerTypeName = Config.Get("data-feed-handler", "FileSystemDataFeed");
             var resultHandlerTypeName = Config.Get("result-handler", "BacktestingResultHandler");
