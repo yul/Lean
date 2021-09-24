@@ -122,3 +122,4 @@ namespace QuantConnect.Algorithm.CSharp
         };
     }
 }
+
