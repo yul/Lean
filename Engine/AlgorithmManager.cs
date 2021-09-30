@@ -125,8 +125,7 @@ namespace QuantConnect.Lean.Engine
             var nextSettlementScanTime = DateTime.MinValue;
             var time = algorithm.StartDate.Date;
 
-            var delistings = new List<Delisting>();
-            var splitWarnings = new List<Split>();
+            var splitDelistingManager = new SplitDelistingManager(_algorithm);
 
             //Initialize Properties:
             AlgorithmId = job.AlgorithmId;
@@ -311,10 +310,10 @@ namespace QuantConnect.Lean.Engine
                 transactions.ProcessSynchronousEvents();
 
                 // process end of day delistings
-                ProcessDelistedSymbols(algorithm, delistings);
+                splitDelistingManager.ProcessDelistedSymbols();
 
                 // process split warnings for options
-                ProcessSplitSymbols(algorithm, splitWarnings, delistings);
+                splitDelistingManager.ProcessSplitSymbols();
 
                 //Check if the user's signalled Quit: loop over data until day changes.
                 if (_algorithm.Status != AlgorithmStatus.Running && _algorithm.RunTimeError == null)
@@ -561,10 +560,10 @@ namespace QuantConnect.Lean.Engine
                 }
 
                 // run the delisting logic after firing delisting events
-                HandleDelistedSymbols(algorithm, timeSlice.Slice.Delistings, delistings);
+                splitDelistingManager.HandleDelistedSymbols(timeSlice.Slice.Delistings);
 
                 // run split logic after firing split events
-                HandleSplitSymbols(timeSlice.Slice.Splits, splitWarnings);
+                splitDelistingManager.HandleSplitSymbols(timeSlice.Slice.Splits);
 
                 //After we've fired all other events in this second, fire the pricing events:
                 try
@@ -946,217 +945,6 @@ namespace QuantConnect.Lean.Engine
             return false;
         }
 
-        /// <summary>
-        /// Performs delisting logic for the securities specified in <paramref name="newDelistings"/> that are marked as <see cref="DelistingType.Delisted"/>.
-        /// </summary>
-        private static void HandleDelistedSymbols(IAlgorithm algorithm, Delistings newDelistings, List<Delisting> delistings)
-        {
-            foreach (var delisting in newDelistings.Values)
-            {
-                Log.Trace($"AlgorithmManager.HandleDelistedSymbols(): Delisting {delisting.Type}: {delisting.Symbol.Value}, UtcTime: {algorithm.UtcTime}, DelistingTime: {delisting.Time}");
-                if (algorithm.LiveMode)
-                {
-                    // skip automatic handling of delisting event in live trading
-                    // Lean will not exercise, liquidate or cancel open orders
-                    continue;
-                }
-
-                // submit an order to liquidate on market close
-                if (delisting.Type == DelistingType.Warning)
-                {
-                    if (delistings.All(x => x.Symbol != delisting.Symbol))
-                    {
-                        delistings.Add(delisting);
-                    }
-                }
-                else
-                {
-                    // mark security as no longer tradable
-                    var security = algorithm.Securities[delisting.Symbol];
-                    security.IsTradable = false;
-                    security.IsDelisted = true;
-
-                    // the subscription are getting removed from the data feed because they end
-                    // remove security from all universes
-                    foreach (var ukvp in algorithm.UniverseManager)
-                    {
-                        var universe = ukvp.Value;
-                        if (universe.ContainsMember(security.Symbol))
-                        {
-                            var userUniverse = universe as UserDefinedUniverse;
-                            if (userUniverse != null)
-                            {
-                                userUniverse.Remove(security.Symbol);
-                            }
-                            else
-                            {
-                                universe.RemoveMember(algorithm.UtcTime, security);
-                            }
-                        }
-                    }
-
-                    var cancelledOrders = algorithm.Transactions.CancelOpenOrders(delisting.Symbol);
-                    foreach (var cancelledOrder in cancelledOrders)
-                    {
-                        Log.Trace("AlgorithmManager.Run(): " + cancelledOrder);
-                    }
-                }
-            }
-        }
-
-        /// <summary>
-        /// Performs actual delisting of the contracts in delistings collection
-        /// </summary>
-        private static void ProcessDelistedSymbols(IAlgorithm algorithm, List<Delisting> delistings)
-        {
-            for (var i = delistings.Count - 1; i >= 0; i--)
-            {
-                var delisting = delistings[i];
-                var security = algorithm.Securities[delisting.Symbol];
-                if (security.Holdings.Quantity == 0)
-                {
-                    continue;
-                }
-
-                if (security.LocalTime < delisting.GetLiquidationTime(security.Exchange.Hours))
-                {
-                    continue;
-                }
-
-                // if there is any delisting event for a symbol that we are the underlying for and we are still invested retry
-                // they will by liquidated first
-                if (delistings.Any(delistingEvent => delistingEvent.Symbol.Underlying == security.Symbol
-                    && algorithm.Securities[delistingEvent.Symbol].Invested))
-                {
-                    // this case could happen for example if we have a future 'A' position open and a future option position with underlying 'A'
-                    // and both get delisted on the same date, we will allow the FOP exercise order to get handled first
-                    continue;
-                }
-
-                // submit an order to liquidate on market close or exercise (for options)
-                var request = security.CreateDelistedSecurityOrderRequest(algorithm.UtcTime);
-
-                delistings.RemoveAt(i);
-                algorithm.Transactions.ProcessRequest(request);
-
-                // don't allow users to open a new position once we sent the liquidation order
-                security.IsTradable = false;
-            }
-        }
-
-        /// <summary>
-        /// Keeps track of split warnings so we can later liquidate option contracts
-        /// </summary>
-        private void HandleSplitSymbols(Splits newSplits, List<Split> splitWarnings)
-        {
-            foreach (var split in newSplits.Values)
-            {
-                if (split.Type != SplitType.Warning)
-                {
-                    Log.Trace($"AlgorithmManager.HandleSplitSymbols(): {_algorithm.Time} - Security split occurred: Split Factor: {split} Reference Price: {split.ReferencePrice}");
-                    continue;
-                }
-
-                Log.Trace($"AlgorithmManager.HandleSplitSymbols(): {_algorithm.Time} - Security split warning: {split}");
-
-                if (!splitWarnings.Any(x => x.Symbol == split.Symbol && x.Type == SplitType.Warning))
-                {
-                    splitWarnings.Add(split);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Liquidate option contact holdings who's underlying security has split
-        /// </summary>
-        private void ProcessSplitSymbols(IAlgorithm algorithm, List<Split> splitWarnings, List<Delisting> delistings)
-        {
-            // NOTE: This method assumes option contracts have the same core trading hours as their underlying contract
-            //       This is a small performance optimization to prevent scanning every contract on every time step,
-            //       instead we scan just the underlyings, thereby reducing the time footprint of this methods by a factor
-            //       of N, the number of derivative subscriptions
-            for (int i = splitWarnings.Count - 1; i >= 0; i--)
-            {
-                var split = splitWarnings[i];
-                var security = algorithm.Securities[split.Symbol];
-
-                if (!security.IsTradable
-                    && !algorithm.UniverseManager.ActiveSecurities.Keys.Contains(split.Symbol))
-                {
-                    Log.Debug($"AlgorithmManager.ProcessSplitSymbols(): {_algorithm.Time} - Removing split warning for {security.Symbol}");
-
-                    // remove the warning from out list
-                    splitWarnings.RemoveAt(i);
-                    // Since we are storing the split warnings for a loop
-                    // we need to check if the security was removed.
-                    // When removed, it will be marked as non tradable but just in case
-                    // we expect it not to be an active security either
-                    continue;
-                }
-
-                var nextMarketClose = security.Exchange.Hours.GetNextMarketClose(security.LocalTime, false);
-
-                // determine the latest possible time we can submit a MOC order
-                var configs = algorithm.SubscriptionManager.SubscriptionDataConfigService
-                    .GetSubscriptionDataConfigs(security.Symbol);
-
-                if (configs.Count == 0)
-                {
-                    // should never happen at this point, if it does let's give some extra info
-                    throw new Exception(
-                        $"AlgorithmManager.ProcessSplitSymbols(): {_algorithm.Time} - No subscriptions found for {security.Symbol}" +
-                        $", IsTradable: {security.IsTradable}" +
-                        $", Active: {algorithm.UniverseManager.ActiveSecurities.Keys.Contains(split.Symbol)}");
-                }
-
-                var latestMarketOnCloseTimeRoundedDownByResolution = nextMarketClose.Subtract(MarketOnCloseOrder.SubmissionTimeBuffer)
-                    .RoundDownInTimeZone(configs.GetHighestResolution().ToTimeSpan(), security.Exchange.TimeZone, configs.First().DataTimeZone);
-
-                // we don't need to do anyhing until the market closes
-                if (security.LocalTime < latestMarketOnCloseTimeRoundedDownByResolution) continue;
-
-                // fetch all option derivatives of the underlying with holdings (excluding the canonical security)
-                var derivatives = algorithm.Securities.Where(kvp => kvp.Key.HasUnderlying &&
-                    kvp.Key.SecurityType.IsOption() &&
-                    kvp.Key.Underlying == security.Symbol &&
-                    !kvp.Key.Underlying.IsCanonical() &&
-                    kvp.Value.HoldStock
-                );
-
-                foreach (var kvp in derivatives)
-                {
-                    var optionContractSymbol = kvp.Key;
-                    var optionContractSecurity = (Option) kvp.Value;
-
-                    if (delistings.Any(x => x.Symbol == optionContractSymbol
-                        && x.Time.Date == optionContractSecurity.LocalTime.Date))
-                    {
-                        // if the option is going to be delisted today we skip sending the market on close order
-                        continue;
-                    }
-
-                    // close any open orders
-                    algorithm.Transactions.CancelOpenOrders(optionContractSymbol, "Canceled due to impending split. Separate MarketOnClose order submitted to liquidate position.");
-
-                    var request = new SubmitOrderRequest(OrderType.MarketOnClose, optionContractSecurity.Type, optionContractSymbol,
-                        -optionContractSecurity.Holdings.Quantity, 0, 0, algorithm.UtcTime,
-                        "Liquidated due to impending split. Option splits are not currently supported."
-                    );
-
-                    // send MOC order to liquidate option contract holdings
-                    algorithm.Transactions.AddOrder(request);
-
-                    // mark option contract as not tradable
-                    optionContractSecurity.IsTradable = false;
-
-                    algorithm.Debug($"MarketOnClose order submitted for option contract '{optionContractSymbol}' due to impending {split.Symbol.Value} split event. "
-                        + "Option splits are not currently supported.");
-                }
-
-                // remove the warning from out list
-                splitWarnings.RemoveAt(i);
-            }
-        }
 
         /// <summary>
         /// Determines if a data point is in it's native, configured resolution

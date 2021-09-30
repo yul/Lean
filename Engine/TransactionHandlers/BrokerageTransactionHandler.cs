@@ -162,11 +162,6 @@ namespace QuantConnect.Lean.Engine.TransactionHandlers
                 HandleAccountChanged(account);
             };
 
-            _brokerage.OptionPositionAssigned += (sender, fill) =>
-            {
-                HandlePositionAssigned(fill);
-            };
-
             _brokerage.OptionNotification += (sender, e) =>
             {
                 HandleOptionNotification(e);
@@ -1129,18 +1124,9 @@ namespace QuantConnect.Lean.Engine.TransactionHandlers
         }
 
         /// <summary>
-        /// Option assignment/exercise event is received and propagated to the user algo
-        /// </summary>
-        private void HandlePositionAssigned(OrderEvent fill)
-        {
-            // informing user algorithm that option position has been assigned
-            _algorithm.OnAssignmentOrderEvent(fill);
-        }
-
-        /// <summary>
         /// Option notification event is received and new order events are generated
         /// </summary>
-        private void HandleOptionNotification(OptionNotificationEventArgs e)
+        internal void HandleOptionNotification(OptionNotificationEventArgs e)
         {
             if (_algorithm.Securities.TryGetValue(e.Symbol, out var security))
             {
@@ -1229,6 +1215,12 @@ namespace QuantConnect.Lean.Engine.TransactionHandlers
             foreach (var orderEvent in orderEvents)
             {
                 HandleOrderEvent(orderEvent);
+
+                if (orderEvent.IsAssignment)
+                {
+                    // informing user algorithm that option position has been assigned
+                    _algorithm.OnAssignmentOrderEvent(orderEvent);
+                }
             }
         }
 

@@ -381,6 +381,11 @@ namespace QuantConnect.Securities
         }
 
         /// <summary>
+        /// Gets the <see cref="IOrderProvider"/> used for fetching orders for the algorithm
+        /// </summary>
+        public IOrderProcessor GetOrderProcessor() => _orderProcessor;
+
+        /// <summary>
         /// Sets the <see cref="IOrderProvider"/> used for fetching orders for the algorithm
         /// </summary>
         /// <param name="orderProvider">The <see cref="IOrderProvider"/> to be used to manage fetching orders</param>

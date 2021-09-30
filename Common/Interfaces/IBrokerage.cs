@@ -34,11 +34,6 @@ namespace QuantConnect.Interfaces
         event EventHandler<OrderEvent> OrderStatusChanged;
 
         /// <summary>
-        /// Event that fires each time a short option position is assigned
-        /// </summary>
-        event EventHandler<OrderEvent> OptionPositionAssigned;
-
-        /// <summary>
         /// Event that fires each time an option position has changed
         /// </summary>
         event EventHandler<OptionNotificationEventArgs> OptionNotification;

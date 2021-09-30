@@ -363,7 +363,7 @@ namespace QuantConnect.Brokerages.Backtesting
                             if (order.Type == OrderType.OptionExercise)
                             {
                                 var option = (Option)security;
-                                fills = option.OptionExerciseModel.OptionExercise(option, order as OptionExerciseOrder).ToArray();
+                                OnOptionNotification(new OptionNotificationEventArgs(option.Symbol, order.Quantity + option.Holdings.Quantity));
                             }
                             else
                             {
@@ -433,12 +433,6 @@ namespace QuantConnect.Brokerages.Backtesting
                             //If the fill models come back suggesting filled, process the affects on portfolio
                             OnOrderEvent(fill);
                         }
-
-                        if (fill.IsAssignment)
-                        {
-                            fill.Message = order.Tag;
-                            OnOptionPositionAssigned(fill);
-                        }
                     }
 
                     if (fills.All(x => x.Status.IsClosed()))
@@ -479,10 +473,7 @@ namespace QuantConnect.Brokerages.Backtesting
             _pendingOptionAssignments.Add(option.Symbol);
 
             // assignments always cause a positive change to option contract holdings
-            var request = new SubmitOrderRequest(OrderType.OptionExercise, option.Type, option.Symbol, Math.Abs(quantity), 0m, 0m, 0m, Algorithm.UtcTime, "Simulated option assignment before expiration");
-
-            var ticket = Algorithm.Transactions.ProcessRequest(request);
-            Log.Trace($"BacktestingBrokerage.ActivateOptionAssignment(): OrderId: {ticket.OrderId}");
+            OnOptionNotification(new OptionNotificationEventArgs(option.Symbol, quantity + option.Holdings.Quantity));
         }
 
         /// <summary>
