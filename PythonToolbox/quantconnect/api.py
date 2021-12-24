@@ -279,22 +279,39 @@ class Api:
                 'backtestName': backtestName
             }, True)
 
-    def read_backtest(self, projectId, backtestId, json_format = True):
+    def read_backtest(self, projectId, backtestId, json_format=True, getCharts=True, chartNames=None):
         '''Read out the full result of a specific backtest.
 
         Args:
             projectId(int): Project id for the backtest we'd like to read
             backtestId(str): Backtest id for the backtest we'd like to read
-            parsed(boolean): True if parse the results as pandas.DataFrame
+            json_format(boolean): True if use json format for result otherwise return Result object
+            getCharts(boolean): if True, load charts data with additional requests (slow)
+            chartNames(Optional[[str]]): list of chart names to pull, or None no pull all charts
         Returns:
             dictionary that includes the backtest information or Result object
         '''
-        json =  self.Execute('backtests/read',
-            {
-                'projectId' : projectId,
-                'backtestId': backtestId
-            })
+        # get default backtest json
+        json = self.Execute('backtests/read',
+                             {
+                                 'projectId' : projectId,
+                                 'backtestId': backtestId,
+                             })
 
+        # load extra charts if required
+        if json["backtest"]["completed"] and getCharts:
+            updatedCharts = {}
+            for name in json["backtest"]["charts"]:
+                if not chartNames or name in chartNames:
+                    chartJson = self.Execute('backtests/read',
+                                 {
+                                     'projectId' : projectId,
+                                     'backtestId': backtestId,
+                                     'chart': name
+                                 }, is_post=True)
+                    updatedCharts[name] = chartJson["backtest"]["charts"][name]
+            for chartName in updatedCharts:
+                json["backtest"]["charts"][chartName] = updatedCharts[chartName]
         return json if json_format else Result(json)
 
     def read_backtest_report(self, projectId, backtestId, save=False):
